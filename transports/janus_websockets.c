@@ -1210,7 +1210,6 @@ static int janus_websockets_common_callback(
 					char* response = g_async_queue_try_pop(ws_client->messages);
 					if (!response) {
 						/* No messages found */
-						lws_callback_on_writable(wsi);
 						janus_mutex_unlock(&ws_client->ts->mutex);
 						return 0;
 					}
