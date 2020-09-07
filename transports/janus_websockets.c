@@ -1202,7 +1202,7 @@ static int janus_websockets_common_callback(
 
 				/* Check if we have a pending/partial write to complete first */
 				if(ws_client->bufpending > 0 && ws_client->bufoffset > 0) {
-					JANUS_LOG(LOG_WARN, "[%s-%p] Completing pending WebSocket write (still need to write last %zu bytes)...\n",
+					JANUS_LOG(LOG_HUGE, "[%s-%p] Completing pending WebSocket write (still need to write last %zu bytes)...\n",
 						log_prefix, wsi, ws_client->bufpending);
 				}
 				else {
@@ -1214,11 +1214,11 @@ static int janus_websockets_common_callback(
 						return 0;
 					}
 					/* Gotcha! */
-					JANUS_LOG(LOG_WARN, "[%s-%p] Sending WebSocket message (%zu bytes)...\n", log_prefix, wsi, strlen(response));
+					JANUS_LOG(LOG_HUGE, "[%s-%p] Sending WebSocket message (%zu bytes)...\n", log_prefix, wsi, strlen(response));
 					size_t buflen = LWS_PRE + strlen(response);
 					if (buflen > ws_client->buflen) {
 						/* We need a larger shared buffer */
-						JANUS_LOG(LOG_WARN, "[%s-%p] Re-allocating to %zu bytes (was %zu, response is %zu bytes)\n", log_prefix, wsi, buflen, ws_client->buflen, strlen(response));
+						JANUS_LOG(LOG_HUGE, "[%s-%p] Re-allocating to %zu bytes (was %zu, response is %zu bytes)\n", log_prefix, wsi, buflen, ws_client->buflen, strlen(response));
 						ws_client->buflen = buflen;
 						ws_client->buffer = g_realloc(ws_client->buffer, buflen);
 					}
@@ -1236,7 +1236,7 @@ static int janus_websockets_common_callback(
 				int flags = lws_write_ws_flags(LWS_WRITE_TEXT, ws_client->bufoffset <= LWS_PRE, ws_client->bufpending <= (size_t)amount);
 				/* Send the fragment with proper flags */
 				int sent = lws_write(wsi, ws_client->buffer + ws_client->bufoffset, (size_t)amount, flags);
-				JANUS_LOG(LOG_WARN, "[%s-%p]   -- First=%d, Last=%d, Requested=%d bytes, Sent=%d bytes, Missing=%zu bytes\n", log_prefix, wsi, ws_client->bufoffset <= LWS_PRE, ws_client->bufpending <= (size_t)amount, amount, sent, ws_client->bufpending - amount);
+				JANUS_LOG(LOG_HUGE, "[%s-%p]   -- First=%d, Last=%d, Requested=%d bytes, Sent=%d bytes, Missing=%zu bytes\n", log_prefix, wsi, ws_client->bufoffset <= LWS_PRE, ws_client->bufpending <= (size_t)amount, amount, sent, ws_client->bufpending - amount);
 				if(sent < amount) {
 					/* Error on sending, abort operation */
 					JANUS_LOG(LOG_ERR, "Websocket sent only %d bytes (expected %d)\n", sent, amount);
@@ -1250,7 +1250,7 @@ static int janus_websockets_common_callback(
 					if(ws_client->bufpending > 0) {
 						/* We still couldn't send everything that was left, we'll try and complete this in the next round */
 						/* We couldn't send everything in a single write, we'll complete this in the next round */
-						JANUS_LOG(LOG_WARN, "[%s-%p]   -- Couldn't write all bytes (%zu missing), setting offset %zu\n",
+						JANUS_LOG(LOG_HUGE, "[%s-%p]   -- Couldn't write all bytes (%zu missing), setting offset %zu\n",
 							log_prefix, wsi, ws_client->bufpending, ws_client->bufoffset);
 					}
 				}
