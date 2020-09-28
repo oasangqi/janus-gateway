@@ -965,6 +965,7 @@ int janus_websockets_send_message(janus_transport_session *transport, void *requ
 	}
 	/* Convert to string and enqueue */
 	char *payload = json_dumps(message, json_format);
+	JANUS_LOG(LOG_VERB, "lilei janus send proto:%s\n", payload);
 	g_async_queue_push(client->messages, payload);
 #if (LWS_LIBRARY_VERSION_MAJOR >= 3)
 	/* On libwebsockets >= 3.x we use lws_cancel_service */
@@ -1150,6 +1151,7 @@ static int janus_websockets_common_callback(
 			JANUS_LOG(LOG_HUGE, "[%s-%p] Done, parsing message: %zu bytes\n", log_prefix, wsi, strlen(ws_client->incoming));
 			/* If we got here, the message is complete: parse the JSON payload */
 			json_error_t error;
+			JANUS_LOG(LOG_VERB, "lilei janus recv proto:%s\n",ws_client->incoming);
 			json_t *root = json_loads(ws_client->incoming, 0, &error);
 			g_free(ws_client->incoming);
 			ws_client->incoming = NULL;
