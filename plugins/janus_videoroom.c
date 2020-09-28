@@ -1587,6 +1587,7 @@ typedef struct janus_videoroom_publisher {
 	int user_audio_active_packets;	/* Participant's audio_active_packets overwriting global room setting */
 	int user_audio_level_average;	/* Participant's audio_level_average overwriting global room setting */
 	gboolean talking; /* Whether this participant is currently talking (uses audio levels extension) */
+	gboolean muted;	// 是否静音
 	gboolean data_active;
 	gboolean firefox;	/* We send Firefox users a different kind of FIR */
 	uint32_t bitrate;
@@ -2615,6 +2616,8 @@ static void janus_videoroom_leave_or_unpublish(janus_videoroom_publisher *partic
 		json_object_set_new(info, "event", json_string(is_leaving ? (kicked ? "kicked" : "leaving") : "unpublished"));
 		json_object_set_new(info, "room", string_ids ? json_string(participant->room_id_str) : json_integer(participant->room_id));
 		json_object_set_new(info, "id", string_ids ? json_string(participant->user_id_str) : json_integer(participant->user_id));
+		if(participant->display)
+			json_object_set_new(info, "display", json_string(participant->display));
 		gateway->notify_event(&janus_videoroom_plugin, NULL, info);
 	}
 	if(is_leaving) {
@@ -3526,6 +3529,7 @@ static json_t *janus_videoroom_process_synchronous_request(janus_videoroom_sessi
 		}
 		janus_mutex_lock(&rooms_mutex);
 		janus_videoroom *videoroom = NULL;
+		// 检查是否有权限
 		error_code = janus_videoroom_access_room(root, TRUE, FALSE, &videoroom, error_cause, sizeof(error_cause));
 		if(error_code != 0) {
 			janus_mutex_unlock(&rooms_mutex);
@@ -4899,8 +4903,10 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 			participant->audio_dBov_level = level;
 			int audio_active_packets = participant->user_audio_active_packets ? participant->user_audio_active_packets : videoroom->audio_active_packets;
 			int audio_level_average = participant->user_audio_level_average ? participant->user_audio_level_average : videoroom->audio_level_average;
+			// 每收满（默认100个）包
 			if(participant->audio_active_packets > 0 && participant->audio_active_packets == audio_active_packets) {
 				gboolean notify_talk_event = FALSE;
+				// 平均音量，值越小音量越大
 				float audio_dBov_avg = (float)participant->audio_dBov_sum/(float)participant->audio_active_packets;
 				if(audio_dBov_avg < audio_level_average) {
 					/* Participant talking, should we notify all participants? */
@@ -4937,10 +4943,35 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 						gateway->notify_event(&janus_videoroom_plugin, session->handle, info);
 					}
 				}
+				// lilei add start: 非静音到静音
+				gboolean notify_mute_event = FALSE;
+				if (audio_dBov_avg == 127) {
+					if (participant->muted == FALSE) {
+						participant->muted = TRUE;
+						notify_mute_event = TRUE;
+					}
+				} else {
+					if (participant->muted == TRUE) {
+						participant->muted = FALSE;
+						notify_mute_event = TRUE;
+					}
+				}
+				if (notify_mute_event) {
+					janus_mutex_lock(&videoroom->mutex);
+					json_t *event = json_object();
+					json_object_set_new(event, "videoroom", json_string(participant->muted ? "muted" : "unmuted"));
+					json_object_set_new(event, "room", string_ids ? json_string(videoroom->room_id_str) : json_integer(videoroom->room_id));
+					json_object_set_new(event, "id", string_ids ? json_string(participant->user_id_str) : json_integer(participant->user_id));
+					/* Notify the speaker this event is related to as well */
+					janus_videoroom_notify_participants(participant, event, TRUE);
+					json_decref(event);
+					janus_mutex_unlock(&videoroom->mutex);
+				}
 			}
 		}
 	}
 
+	// 发布了音(视)频且接收到音(视)频包
 	if((!video && participant->audio_active) || (video && participant->video_active)) {
 		janus_rtp_header *rtp = (janus_rtp_header *)buf;
 		int sc = video ? 0 : -1;
@@ -5057,9 +5088,11 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 		rtp->type = video ? participant->video_pt : participant->audio_pt;
 		/* Save the frame if we're recording */
 		if(!video || (participant->ssrc[0] == 0 && participant->rid[0] == NULL)) {
+			// 录制音频、录制（未开启多播的）视频
 			janus_recorder_save_frame(video ? participant->vrc : participant->arc, buf, len);
 		} else {
 			/* We're simulcasting, save the best video quality */
+			// 多播视频录高清
 			gboolean save = janus_rtp_simulcasting_context_process_rtp(&participant->rec_simctx,
 				buf, len, participant->ssrc, participant->rid, participant->vcodec, &participant->rec_ctx);
 			if(save) {
@@ -5104,6 +5137,7 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 		packet.seq_number = ntohs(packet.data->seq_number);
 		/* Go: some viewers may decide to drop the packet, but that's up to them */
 		janus_mutex_lock_nodebug(&participant->subscribers_mutex);
+		// 转发RTP包给订阅者
 		g_slist_foreach(participant->subscribers, janus_videoroom_relay_rtp_packet, &packet);
 		janus_mutex_unlock_nodebug(&participant->subscribers_mutex);
 
@@ -5541,6 +5575,7 @@ static void janus_videoroom_hangup_media_internal(gpointer session_data) {
 		}
 		participant->e2ee = FALSE;
 		janus_mutex_unlock(&participant->subscribers_mutex);
+		// 发布者离开房间
 		janus_videoroom_leave_or_unpublish(participant, FALSE, FALSE);
 		janus_refcount_decrease(&participant->ref);
 	} else if(session->participant_type == janus_videoroom_p_type_subscriber) {
@@ -7657,6 +7692,7 @@ static void janus_videoroom_relay_rtp_packet(gpointer data, gpointer user_data) 
 			/* Fix sequence number and timestamp (publisher switching may be involved) */
 			janus_rtp_header_update(packet->data, &subscriber->context, TRUE, 0);
 			/* Send the packet */
+			// 转发视频
 			if(gateway != NULL) {
 				janus_plugin_rtp rtp = { .video = packet->is_video, .buffer = (char *)packet->data, .length = packet->length,
 					.extensions = packet->extensions };
@@ -7675,6 +7711,7 @@ static void janus_videoroom_relay_rtp_packet(gpointer data, gpointer user_data) 
 		/* Fix sequence number and timestamp (publisher switching may be involved) */
 		janus_rtp_header_update(packet->data, &subscriber->context, FALSE, 0);
 		/* Send the packet */
+		// 转发音频
 		if(gateway != NULL) {
 			janus_plugin_rtp rtp = { .video = packet->is_video, .buffer = (char *)packet->data, .length = packet->length,
 				.extensions = packet->extensions };
