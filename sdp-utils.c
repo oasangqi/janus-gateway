@@ -1293,6 +1293,8 @@ janus_sdp *janus_sdp_generate_offer(const char *name, const char *address, ...) 
 		/* It is safe to add transport-wide rtcp feedback message here, won't be used unless the header extension is negotiated */
 		a = janus_sdp_attribute_create("rtcp-fb", "%d transport-cc", audio_pt);
 		m->attributes = g_list_append(m->attributes, a);
+		a = janus_sdp_attribute_create("rtcp-fb", "%d nack", audio_pt);
+		m->attributes = g_list_append(m->attributes, a);
 		offer->m_lines = g_list_append(offer->m_lines, m);
 	}
 	if(do_video) {
@@ -1641,6 +1643,8 @@ janus_sdp *janus_sdp_generate_answer(janus_sdp *offer, ...) {
 				const char *codec_rtpmap = janus_sdp_get_codec_rtpmap(codec);
 				if(codec_rtpmap) {
 					janus_sdp_attribute *a = janus_sdp_attribute_create("rtpmap", "%d %s", pt, codec_rtpmap);
+					am->attributes = g_list_append(am->attributes, a);
+					a = janus_sdp_attribute_create("rtcp-fb", "%d nack", pt);
 					am->attributes = g_list_append(am->attributes, a);
 					/* Check if we need to add a payload type for DTMF tones (telephone-event/8000) */
 					if(audio_dtmf) {

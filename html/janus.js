@@ -2756,6 +2756,7 @@ function Janus(gatewayCallbacks) {
 					"sdp": offer.sdp
 				};
 				callbacks.customizeSdp(jsep);
+				jsep.sdp = jsep.sdp.replace("a=rtcp-fb:111 transport-cc\r\n", "a=rtcp-fb:111 transport-cc\r\na=rtcp-fb:111 nack\r\n");
 				offer.sdp = jsep.sdp;
 				Janus.log("Setting local description");
 				if(sendVideo && simulcast) {
@@ -2996,6 +2997,8 @@ function Janus(gatewayCallbacks) {
 					"sdp": answer.sdp
 				};
 				callbacks.customizeSdp(jsep);
+				//jsep.sdp = jsep.sdp.replace("a=rtcp-fb:111 transport-cc\r\n", "a=rtcp-fb:111 transport-cc\r\na=rtcp-fb:111 nack\r\n");
+				jsep.sdp = jsep.sdp.replace("a=rtpmap:111 opus/48000/2\r\n", "a=rtpmap:111 opus/48000/2\r\na=rtcp-fb:111 nack\r\n");
 				answer.sdp = jsep.sdp;
 				Janus.log("Setting local description");
 				if(sendVideo && simulcast) {
