@@ -1256,6 +1256,7 @@ gint janus_ice_handle_attach_plugin(void *core_session, janus_ice_handle *handle
 			current_loop = event_loops;
 		janus_mutex_unlock(&event_loops_mutex);
 	}
+	// 注册发包函数?
 	handle->rtp_source = janus_ice_outgoing_traffic_create(handle, (GDestroyNotify)g_free);
 	g_source_set_priority(handle->rtp_source, G_PRIORITY_DEFAULT);
 	g_source_attach(handle->rtp_source, handle->mainctx);
@@ -1668,11 +1669,16 @@ static void janus_ice_component_free(const janus_refcount *component_ref) {
 /* Call plugin slow_link callback if a minimum of lost packets are detected within a second */
 static void
 janus_slow_link_update(janus_ice_component *component, janus_ice_handle *handle,
-		gboolean video, gboolean uplink, guint lost) {
+		gboolean video, gboolean uplink, guint lost,
+		janus_rtcp_context *rtcp_ctx) {
 	/* We keep the counters in different janus_ice_stats objects, depending on the direction */
+	// sl_lost_last_count:RTCP RR包告知的丢包个数
 	guint sl_lost_last_count = uplink ?
 		(video ? component->in_stats.sl_lost_count_video : component->in_stats.sl_lost_count_audio) :
 		(video ? component->out_stats.sl_lost_count_video : component->out_stats.sl_lost_count_audio);
+	// lost:本次RTCP RR包告知的丢包个数
+	// 发布包的丢包率油Janus每秒统计一次
+	// 定阅包的丢包率统计频率由客户端的RTCP RR包频率决定
 	guint sl_lost_recently = (lost >= sl_lost_last_count) ? (lost - sl_lost_last_count) : 0;
 	if(slowlink_threshold > 0 && sl_lost_recently >= slowlink_threshold) {
 		/* Tell the plugin */
@@ -1692,6 +1698,21 @@ janus_slow_link_update(janus_ice_component *component, janus_ice_handle *handle,
 			json_object_set_new(event, "media", json_string(video ? "video" : "audio"));
 			json_object_set_new(event, "uplink", uplink ? json_true() : json_false());
 			json_object_set_new(event, "lost", json_integer(sl_lost_recently));
+			// lilei add start: add new field
+			if (rtcp_ctx->rr_interval_ts > 0) {
+				// 通知客户端订阅包每秒丢包个数
+				// 对于发布包lost和lost_per_sec的值一样
+				json_object_set_new(event, "lost_per_sec", json_integer(1000000 * sl_lost_recently / rtcp_ctx->rr_interval_ts));
+				JANUS_LOG(LOG_VERB, "[%"SCNu64"] lilei debug %s uplink:%s, last:%lld interval:%lld lost:%d lost_per_sec:%d\n", 
+						handle->handle_id, video?"video":"audio", uplink?"true":"false",  
+						rtcp_ctx->rr_last_ts, rtcp_ctx->rr_interval_ts, sl_lost_recently, 
+						1000000 * sl_lost_recently / rtcp_ctx->rr_interval_ts);
+			} else {
+				// new field is 0
+				json_object_set_new(event, "lost_per_sec", json_integer(sl_lost_recently));
+			}
+			// lilei add end
+			
 			/* Send the event */
 			JANUS_LOG(LOG_VERB, "[%"SCNu64"] Sending event to transport...; %p\n", handle->handle_id, handle);
 			janus_session_notify_event(session, event);
@@ -1707,6 +1728,7 @@ janus_slow_link_update(janus_ice_component *component, janus_ice_handle *handle,
 		}
 	}
 	/* Update the counter */
+	// 不管本次RTCP RR告知的丢包有没有超过阈值，都更新最新丢包总数
 	if(uplink) {
 		if(video)
 			component->in_stats.sl_lost_count_video = lost;
@@ -2252,6 +2274,8 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
 		JANUS_LOG(LOG_ERR, "No handle for stream %d??\n", stream_id);
 		return;
 	}
+	// 收到媒体数据
+	//JANUS_LOG(LOG_VERB, "[%"SCNu64"] lilei agent got data\n", handle->handle_id);
 	janus_session *session = (janus_session *)handle->session;
 	if(!component->dtls) {	/* Still waiting for the DTLS stack */
 		JANUS_LOG(LOG_VERB, "[%"SCNu64"] Still waiting for the DTLS stack for component %d in stream %d...\n", handle->handle_id, component_id, stream_id);
@@ -2648,6 +2672,8 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
 					return;
 				}
 				guint16 new_seqn = ntohs(header->seq_number);
+				JANUS_LOG(LOG_HUGE, "lilei debug nacks got %s ssrc:%d seq:%d\n",
+						video ? "video" : "audio", header->ssrc, new_seqn);
 				/* If this is video, check if this is a keyframe: if so, we empty our NACK queue */
 				if(video && stream->video_is_keyframe) {
 					if(stream->video_is_keyframe(payload, plen)) {
@@ -2746,12 +2772,16 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
 					last_seqs_len--;
 				}
 
+				// NACK个数
 				guint nacks_count = g_slist_length(nacks);
 				if(nacks_count) {
 					/* Generate a NACK and send it */
 					JANUS_LOG(LOG_DBG, "[%"SCNu64"] Now sending NACK for %u missed packets (%s stream #%d)\n",
 						handle->handle_id, nacks_count, video ? "video" : "audio", vindex);
+					JANUS_LOG(LOG_VERB, "[%"SCNu64"] lilei debug nacks Now sending NACK for %u missed packets (%s stream #%d)\n",
+						handle->handle_id, nacks_count, video ? "video" : "audio", vindex);
 					char nackbuf[120];
+					// 生成一个RTCP NACK包
 					int res = janus_rtcp_nacks(nackbuf, sizeof(nackbuf), nacks);
 					if(res > 0) {
 						/* Set the right local and remote SSRC in the RTCP packet */
@@ -2759,6 +2789,7 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
 							video ? stream->video_ssrc : stream->audio_ssrc,
 							video ? stream->video_ssrc_peer[vindex] : stream->audio_ssrc_peer);
 						janus_plugin_rtcp rtcp = { .video = video, .buffer = nackbuf, .length = res };
+						// 发送RTCP NACK包
 						janus_ice_relay_rtcp_internal(handle, &rtcp, FALSE);
 					}
 					/* Update stats */
@@ -2903,7 +2934,8 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
 				guint nacks_count = g_slist_length(nacks);
 				if(nacks_count && ((!video && component->do_audio_nacks) || (video && component->do_video_nacks))) {
 					/* Handle NACK */
-					JANUS_LOG(LOG_HUGE, "[%"SCNu64"]     Just got some NACKS (%d) we should handle...\n", handle->handle_id, nacks_count);
+					JANUS_LOG(LOG_VERB, "[%"SCNu64"]     Just got some %s NACKS (%d) we should handle...\n", 
+							handle->handle_id, video ? "video": "audio", nacks_count);
 					GHashTable *retransmit_seqs = (video ? component->video_retransmit_seqs : component->audio_retransmit_seqs);
 					GSList *list = (retransmit_seqs != NULL ? nacks : NULL);
 					int retransmits_cnt = 0;
@@ -2918,6 +2950,7 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
 							JANUS_LOG(LOG_HUGE, "[%"SCNu64"]   >> >> Can't retransmit packet %u, we don't have it...\n", handle->handle_id, seqnr);
 						} else {
 							/* Should we retransmit this packet? */
+							// MAX_NACK_IGNORE时间内有过重传则忽略本次NACK
 							if((p->last_retransmit > 0) && (now-p->last_retransmit < MAX_NACK_IGNORE)) {
 								JANUS_LOG(LOG_HUGE, "[%"SCNu64"]   >> >> Packet %u was retransmitted just %"SCNi64"ms ago, skipping\n", handle->handle_id, seqnr, now-p->last_retransmit);
 								list = list->next;
@@ -2951,7 +2984,9 @@ static void janus_ice_cb_nice_recv(NiceAgent *agent, guint stream_id, guint comp
 								component->rtx_seq_number++;
 								header->seq_number = htons(component->rtx_seq_number);
 							}
+							// 重传包入队(队首)
 							if(handle->queued_packets != NULL) {
+								JANUS_LOG(LOG_VERB, "lilei debug nacks, retransmit %s packet\n", video ? "video": "audio");
 #if GLIB_CHECK_VERSION(2, 46, 0)
 								g_async_queue_push_front(handle->queued_packets, pkt);
 #else
@@ -3592,6 +3627,7 @@ int janus_ice_setup_local(janus_ice_handle *handle, int offer, int audio, int vi
 		janus_ice_webrtc_hangup(handle, "Gathering error");
 		return -1;
 	}
+	// 关联收到媒体数据后的回调
 	nice_agent_attach_recv(handle->agent, handle->stream_id, 1, g_main_loop_get_context(handle->mainloop),
 		janus_ice_cb_nice_recv, component);
 #ifdef HAVE_TURNRESTAPI
@@ -3767,9 +3803,11 @@ static gboolean janus_ice_outgoing_transport_wide_cc_feedback(gpointer user_data
 	return G_SOURCE_CONTINUE;
 }
 
+// 每秒发一次RCTP RR/SR/transport wide cc包
 static gboolean janus_ice_outgoing_rtcp_handle(gpointer user_data) {
 	janus_ice_handle *handle = (janus_ice_handle *)user_data;
 	janus_ice_stream *stream = handle->stream;
+	JANUS_LOG(LOG_VERB, "[%"SCNu64"] lilei janus_ice_outgoing_rtcp_handle\n", handle->handle_id);
 	/* Audio */
 	if(stream && stream->audio_send && stream->component && stream->component->out_stats.audio.packets > 0) {
 		/* Create a SR/SDES compound */
@@ -3797,6 +3835,7 @@ static gboolean janus_ice_outgoing_rtcp_handle(gpointer user_data) {
 		} else {
 			int64_t ntp = tv.tv_sec*G_USEC_PER_SEC + tv.tv_usec;
 			uint32_t rtp_ts = ((ntp-stream->audio_last_ntp_ts)*(rtcp_ctx->tb))/1000000 + stream->audio_last_rtp_ts;
+			JANUS_LOG(LOG_VERB, "lilei debug tb (%d) tb:%u ts:%u (%d)\n", 10, rtcp_ctx->tb, rtp_ts, 20);
 			sr->si.rtp_ts = htonl(rtp_ts);
 		}
 		sr->si.s_packets = htonl(stream->component->out_stats.audio.packets);
@@ -3809,10 +3848,12 @@ static gboolean janus_ice_outgoing_rtcp_handle(gpointer user_data) {
 		janus_ice_relay_rtcp_internal(handle, &rtcp, FALSE);
 		/* Check if we detected too many losses, and send a slowlink event in case */
 		guint lost = janus_rtcp_context_get_lost_all(rtcp_ctx, TRUE);
-		janus_slow_link_update(stream->component, handle, FALSE, TRUE, lost);
+		// 更新两次RR包期间的丢包总数
+		janus_slow_link_update(stream->component, handle, FALSE, TRUE, lost, rtcp_ctx);
 	}
 	if(stream && stream->audio_recv) {
 		/* Create a RR too */
+		// 接收到audio数据，反馈audio的RR包
 		int rrlen = 32;
 		char rtcpbuf[32];
 		memset(rtcpbuf, 0, sizeof(rtcpbuf));
@@ -3829,7 +3870,7 @@ static gboolean janus_ice_outgoing_rtcp_handle(gpointer user_data) {
 		janus_ice_relay_rtcp_internal(handle, &rtcp, FALSE);
 		/* Check if we detected too many losses, and send a slowlink event in case */
 		guint lost = janus_rtcp_context_get_lost_all(stream->audio_rtcp_ctx, FALSE);
-		janus_slow_link_update(stream->component, handle, FALSE, FALSE, lost);
+		janus_slow_link_update(stream->component, handle, FALSE, FALSE, lost, stream->audio_rtcp_ctx);
 	}
 	/* Now do the same for video */
 	if(stream && stream->video_send && stream->component && stream->component->out_stats.video[0].packets > 0) {
@@ -3870,7 +3911,7 @@ static gboolean janus_ice_outgoing_rtcp_handle(gpointer user_data) {
 		janus_ice_relay_rtcp_internal(handle, &rtcp, FALSE);
 		/* Check if we detected too many losses, and send a slowlink event in case */
 		guint lost = janus_rtcp_context_get_lost_all(rtcp_ctx, TRUE);
-		janus_slow_link_update(stream->component, handle, TRUE, TRUE, lost);
+		janus_slow_link_update(stream->component, handle, TRUE, TRUE, lost, rtcp_ctx);
 	}
 	if(stream && stream->video_recv) {
 		/* Create a RR too (for each SSRC, if we're simulcasting) */
@@ -3896,7 +3937,7 @@ static gboolean janus_ice_outgoing_rtcp_handle(gpointer user_data) {
 		}
 		/* Check if we detected too many losses, and send a slowlink event in case */
 		guint lost = janus_rtcp_context_get_lost_all(stream->video_rtcp_ctx[0], FALSE);
-		janus_slow_link_update(stream->component, handle, TRUE, FALSE, lost);
+		janus_slow_link_update(stream->component, handle, TRUE, FALSE, lost, stream->video_rtcp_ctx[0]);
 	}
 	if(twcc_period == 1000) {
 		/* The Transport Wide CC feedback period is 1s as well, send it here */
@@ -4038,6 +4079,7 @@ static gboolean janus_ice_outgoing_stats_handle(gpointer user_data) {
 		}
 	}
 	/* Should we clean up old NACK buffers for any of the streams? */
+	// 清理用于重传的包
 	janus_cleanup_nack_buffer(now, handle->stream, TRUE, TRUE);
 	/* Check if we should also print a summary of SRTP-related errors */
 	handle->last_srtp_summary++;
@@ -4053,6 +4095,7 @@ static gboolean janus_ice_outgoing_stats_handle(gpointer user_data) {
 	return G_SOURCE_CONTINUE;
 }
 
+// ICE通道发数据
 static gboolean janus_ice_outgoing_traffic_handle(janus_ice_handle *handle, janus_ice_queued_packet *pkt) {
 	janus_session *session = (janus_session *)handle->session;
 	janus_ice_stream *stream = handle->stream;
@@ -4482,6 +4525,7 @@ static gboolean janus_ice_outgoing_traffic_handle(janus_ice_handle *handle, janu
 						if(rtcp_ctx)
 							g_atomic_int_inc(&rtcp_ctx->sent_packets_since_last_rr);
 					}
+					// 保存包，用于重传
 					if(stream->nack_queue_ms > 0 && !pkt->retransmission) {
 						/* Save the packet for retransmissions that may be needed later */
 						if((pkt->type == JANUS_ICE_PACKET_AUDIO && !component->do_audio_nacks) ||
@@ -4508,6 +4552,7 @@ static gboolean janus_ice_outgoing_traffic_handle(janus_ice_handle *handle, janu
 							}
 							g_queue_push_tail(component->audio_retransmit_buffer, p);
 							/* Insert in the table too, for quick lookup */
+							// 根据序列号快速拿到RTP包
 							g_hash_table_insert(component->audio_retransmit_seqs, GUINT_TO_POINTER(seq), p);
 						} else {
 							if(component->video_retransmit_buffer == NULL) {
@@ -4516,6 +4561,7 @@ static gboolean janus_ice_outgoing_traffic_handle(janus_ice_handle *handle, janu
 							}
 							g_queue_push_tail(component->video_retransmit_buffer, p);
 							/* Insert in the table too, for quick lookup */
+							// 用于收到NACK后进行重传
 							g_hash_table_insert(component->video_retransmit_seqs, GUINT_TO_POINTER(seq), p);
 						}
 					} else {

@@ -54,7 +54,7 @@ typedef struct rtcp_header
 	uint16_t version:2;
 	uint16_t type:8;
 #endif
-	uint16_t length:16;
+	uint16_t length:16;	// 32bit个数(不包括头)
 } rtcp_header;
 typedef rtcp_header janus_rtcp_header;
 
@@ -73,9 +73,9 @@ typedef sender_info janus_sender_info;
 typedef struct report_block
 {
 	uint32_t ssrc;
-	uint32_t flcnpl;
-	uint32_t ehsnr;
-	uint32_t jitter;
+	uint32_t flcnpl; // fraction lost && cumulative number of packets lost   
+	uint32_t ehsnr;	//  extended highest sequence number received  
+	uint32_t jitter;	// interarrival jitter
 	uint32_t lsr;
 	uint32_t delay;
 } report_block;
@@ -227,12 +227,12 @@ typedef struct rtcp_context
 {
 	/* Whether we received any RTP packet at all (don't send RR otherwise) */
 	uint8_t rtp_recvd:1;
-	uint32_t rtp_last_inorder_ts;
-	int64_t rtp_last_inorder_time;
+	uint32_t rtp_last_inorder_ts;	// 最近一个有序到达RTP包携带的(客户端)时间戳
+	int64_t rtp_last_inorder_time;	// 最近一个有序RTP包到达(服务端)时的时间戳(微秒)
 
 	uint16_t max_seq_nr;
 	uint16_t seq_cycle;
-	uint16_t base_seq;
+	uint16_t base_seq;	// 第一次收到的RTP包序列号
 	/* Payload type */
 	uint16_t pt;
 
@@ -254,25 +254,26 @@ typedef struct rtcp_context
 	uint32_t rtt;
 
 	/* RFC 3550 A.3 */
-	uint32_t received;
+	uint32_t received;	// 已接收到包的个数(含有序包和重传包)
 	uint32_t received_prior;
-	uint32_t expected;
+	uint32_t expected;	// 当前总共期望收到的包的个数
 	uint32_t expected_prior;
-	uint32_t lost, lost_remote;
+	uint32_t lost, lost_remote; // lost_remote为对端RR包反馈的丢包数
 
 	uint32_t retransmitted;
 	uint32_t retransmitted_prior;
 
 	/* Inbound RR process */
-	int64_t rr_last_ts;
+	int64_t rr_interval_ts; // 两次收、发RR包的时间差，单位:微秒，如果RTCP RR包自身丢包，那只有客户端自身的统计才有意义
+	int64_t rr_last_ts;	// 上次收、发RR包的时间戳
 	uint32_t rr_last_ehsnr;
 	uint32_t rr_last_lost;
 	uint32_t rr_last_nack_count;
-	gint sent_packets_since_last_rr;
+	gint sent_packets_since_last_rr;	// 两次接收RR包时间内的发包个数
 	gint nack_count;
 
 	/* Link quality estimations */
-	double in_link_quality;
+	double in_link_quality;	// 发布链路的质量
 	double in_media_link_quality;
 	double out_link_quality;
 	double out_media_link_quality;

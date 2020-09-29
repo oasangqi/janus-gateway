@@ -332,6 +332,7 @@ static double janus_rtcp_link_quality_filter(double last, double in) {
 	if(last == 0 || last == in || last != last) {
 		return in;
 	} else {
+		// 上一次统计的丢包率权值占比2/3，最近一次丢包率权值占比1/3
 		return (1.0 - 1.0/LINK_QUALITY_FILTER_K) * last + (1.0/LINK_QUALITY_FILTER_K) * in;
 	}
 }
@@ -344,7 +345,8 @@ static void janus_rtcp_rr_update_stats(rtcp_context *ctx, janus_report_block rb)
 		return;
 	}
 	ctx->rr_last_ts = ts;
-	uint32_t total_lost = ntohl(rb.flcnpl) & 0x00FFFFFF;
+	ctx->rr_interval_ts = delta_t;
+	uint32_t total_lost = ntohl(rb.flcnpl) & 0x00FFFFFF; // 低24bit为丢包总数
 	if (ctx->rr_last_ehsnr != 0) {
 		uint32_t sent = g_atomic_int_get(&ctx->sent_packets_since_last_rr);
 		uint32_t expect = ntohl(rb.ehsnr) - ctx->rr_last_ehsnr;
@@ -375,6 +377,8 @@ static void janus_rtcp_incoming_rr(janus_rtcp_context *ctx, janus_rtcp_rr *rr) {
 		uint32_t fraction = ntohl(rr->rb[0].flcnpl) >> 24;
 		uint32_t total = ntohl(rr->rb[0].flcnpl) & 0x00FFFFFF;
 		JANUS_LOG(LOG_HUGE, "jitter=%f, fraction=%"SCNu32", loss=%"SCNu32"\n", jitter, fraction, total);
+		// RTCP RR告知丢包总数
+		//JANUS_LOG(LOG_VERB, "lilei jitter=%f, fraction=%"SCNu32", loss=%"SCNu32"\n", jitter, fraction, total);
 		ctx->lost_remote = total;
 		ctx->jitter_remote = jitter;
 		janus_rtcp_rr_update_stats(ctx, rr->rb[0]);
@@ -822,12 +826,14 @@ int janus_rtcp_process_incoming_rtp(janus_rtcp_context *ctx, char *packet, int l
 		ctx->tb = clock_rate;
 	/* Now parse this RTP packet header and update the rtcp_context instance */
 	uint16_t seq_number = ntohs(rtp->seq_number);
+	// 保存第一个包的序列号
 	if(ctx->base_seq == 0 && ctx->seq_cycle == 0)
 		ctx->base_seq = seq_number;
 
 	int64_t now = janus_get_monotonic_time();
 	if (!rfc4588_pkt) {
 		/* Non-RTX packet */
+		// 包序号更大，为非重传包
 		if ((int16_t)(seq_number - ctx->max_seq_nr) > 0) {
 			/* In-order packet */
 			ctx->received++;
@@ -836,10 +842,12 @@ int janus_rtcp_process_incoming_rtp(janus_rtcp_context *ctx, char *packet, int l
 				ctx->seq_cycle++;
 			ctx->max_seq_nr = seq_number;
 			uint32_t rtp_expected = 0x0;
+			// 翻转
 			if(ctx->seq_cycle > 0) {
 				rtp_expected = ctx->seq_cycle;
 				rtp_expected = rtp_expected << 16;
 			}
+			// 当前期望收到的RTP包个数
 			rtp_expected = rtp_expected + 1 + ctx->max_seq_nr - ctx->base_seq;
 			ctx->expected = rtp_expected;
 
@@ -879,6 +887,7 @@ int janus_rtcp_process_incoming_rtp(janus_rtcp_context *ctx, char *packet, int l
 		}
 	} else {
 		/* RTX packet, just increase retransmitted count */
+		// video的重传包
 		ctx->retransmitted++;
 	}
 
@@ -947,11 +956,14 @@ uint32_t janus_rtcp_context_get_jitter(janus_rtcp_context *ctx, gboolean remote)
 	return (uint32_t) floor((remote ? ctx->jitter_remote : ctx->jitter) / (ctx->tb/1000));
 }
 
+// 每秒评估一次发布链路的质量
 static void janus_rtcp_estimate_in_link_quality(janus_rtcp_context *ctx) {
-	uint32_t expected_interval = ctx->expected - ctx->expected_prior;
-	uint32_t received_interval = ctx->received - ctx->received_prior;
-	uint32_t retransmitted_interval = ctx->retransmitted - ctx->retransmitted_prior;
+	uint32_t expected_interval = ctx->expected - ctx->expected_prior;	// 上一秒期望收到包的个数
+	uint32_t received_interval = ctx->received - ctx->received_prior;	// 上一秒收到包的个数
+	uint32_t retransmitted_interval = ctx->retransmitted - ctx->retransmitted_prior;	// 上一秒收到重传包个数
 
+	// audio的link_lost与media_lost一样
+	
 	/* Link lost is calculated without considering any retransmission */
 	int32_t link_lost = expected_interval - received_interval;
 	if (link_lost < 0) {
@@ -984,6 +996,10 @@ int janus_rtcp_report_block(janus_rtcp_context *ctx, janus_report_block *rb) {
 		lost_interval = expected_interval - received_interval;
 	}
 	ctx->lost += lost_interval;
+	// lilei add start:update last rtcp rr time and interval
+	ctx->rr_interval_ts = now - ctx->rr_last_ts;
+	ctx->rr_last_ts = now; 
+	// lilei add end 
 	uint32_t reported_lost = janus_rtcp_context_get_lost(ctx);
 	uint32_t reported_fraction = janus_rtcp_context_get_lost_fraction(ctx);
 	janus_rtcp_estimate_in_link_quality(ctx);
@@ -1188,7 +1204,7 @@ GSList *janus_rtcp_get_nacks(char *packet, int len) {
 				janus_rtcp_fb *rtcpfb = (janus_rtcp_fb *)rtcp;
 				int nacks = ntohs(rtcp->length)-2;	/* Skip SSRCs */
 				if(nacks > 0) {
-					JANUS_LOG(LOG_DBG, "        Got %d nacks\n", nacks);
+					JANUS_LOG(LOG_VERB, "        Got %d nacks\n", nacks);
 					janus_rtcp_nack *nack = NULL;
 					uint16_t pid = 0;
 					uint16_t blp = 0;
@@ -1200,25 +1216,30 @@ GSList *janus_rtcp_get_nacks(char *packet, int len) {
 						list = g_slist_append(list, GUINT_TO_POINTER(pid));
 						blp = ntohs(nack->blp);
 						memset(bitmask, 0, 20);
+						// 参考https://tools.ietf.org/html/rfc4585#page-34
+						// blp的16bit的第j个bit为1代表序列号为pid+j+1的包丢失
+						// NACK只能表示哪些包丢了，不表示哪些没丢
 						for(j=0; j<16; j++) {
 							bitmask[j] = (blp & ( 1 << j )) >> j ? '1' : '0';
 							if((blp & ( 1 << j )) >> j)
 								list = g_slist_append(list, GUINT_TO_POINTER(pid+j+1));
 						}
 						bitmask[16] = '\n';
-						JANUS_LOG(LOG_DBG, "[%d] %"SCNu16" / %s\n", i, pid, bitmask);
+						JANUS_LOG(LOG_VERB, "[%d] %"SCNu16" / %s\n", i, pid, bitmask);
 					}
 				}
 				break;
 			}
 		}
 		/* Is this a compound packet? */
+		// 多个RTCP包在同一个UDP包中发送
 		int length = ntohs(rtcp->length);
 		if(length == 0)
 			break;
 		total -= length*4+4;
 		if(total <= 0)
 			break;
+		// 下一个UDP包
 		rtcp = (janus_rtcp_header *)((uint32_t*)rtcp + length + 1);
 	}
 	if (error && list) {

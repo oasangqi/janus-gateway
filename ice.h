@@ -243,9 +243,9 @@ typedef struct janus_ice_stats {
 	/*! \brief Data info */
 	janus_ice_stats_info data;
 	/*! \brief Last known count of lost audio packets (for slow_link) */
-	guint sl_lost_count_audio;
+	guint sl_lost_count_audio;	// audio丢包总数
 	/*! \brief Last known count of lost video packets (for slow_link) */
-	guint sl_lost_count_video;
+	guint sl_lost_count_video;	// video丢包总数
 } janus_ice_stats;
 
 /*! \brief Quick helper method to notify a WebRTC hangup through the Janus API
@@ -513,7 +513,7 @@ struct janus_ice_component {
 	/*! \brief List of previously sent janus_rtp_packet RTP packets, in case we receive NACKs */
 	GQueue *audio_retransmit_buffer, *video_retransmit_buffer;
 	/*! \brief HashTable of retransmittable sequence numbers, in case we receive NACKs */
-	GHashTable *audio_retransmit_seqs, *video_retransmit_seqs;
+	GHashTable *audio_retransmit_seqs, *video_retransmit_seqs;  // 用于收到NACK后进行重传
 	/*! \brief Current sequence number for the RFC4588 rtx SSRC session */
 	guint16 rtx_seq_number;
 	/*! \brief Last time a log message about sending retransmits was printed */
@@ -529,9 +529,9 @@ struct janus_ice_component {
 	/*! \brief List of recently received video sequence numbers (as a support to NACK generation, for each simulcast SSRC) */
 	janus_seq_info *last_seqs_video[3];
 	/*! \brief Stats for incoming data (audio/video/data) */
-	janus_ice_stats in_stats;
+	janus_ice_stats in_stats; // 对订阅数据的统计，RTCP反馈的方向为in
 	/*! \brief Stats for outgoing data (audio/video/data) */
-	janus_ice_stats out_stats;
+	janus_ice_stats out_stats; // 对发布数据的统计，RTCP反馈的方向为out
 	/*! \brief Helper flag to avoid flooding the console with the same error all over again */
 	gboolean noerrorlog;
 	/*! \brief Mutex to lock/unlock this component */
