@@ -822,6 +822,7 @@ int janus_rtcp_process_incoming_rtp(janus_rtcp_context *ctx, char *packet, int l
 	int pt = rtp->type;
 	uint32_t clock_rate = clock_rates ?
 		GPOINTER_TO_UINT(g_hash_table_lookup(clock_rates, GINT_TO_POINTER(pt))) : 0;
+	//JANUS_LOG(LOG_VERB, "lilei debug sdp ----> clock:%u type:%d tb:%u\n", clock_rate, pt, ctx->tb);
 	if(clock_rate > 0 && ctx->tb != clock_rate)
 		ctx->tb = clock_rate;
 	/* Now parse this RTP packet header and update the rtcp_context instance */
@@ -1239,7 +1240,7 @@ GSList *janus_rtcp_get_nacks(char *packet, int len) {
 		total -= length*4+4;
 		if(total <= 0)
 			break;
-		// 下一个UDP包
+		// 下一个RTCP包
 		rtcp = (janus_rtcp_header *)((uint32_t*)rtcp + length + 1);
 	}
 	if (error && list) {

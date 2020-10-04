@@ -1150,6 +1150,7 @@ void janus_recordplay_setup_media(janus_plugin_session *handle) {
 	if(!session->recorder) {
 		GError *error = NULL;
 		janus_refcount_increase(&session->ref);
+		// 创建单独的线程播放媒体数据
 		g_thread_try_new("recordplay playout thread", &janus_recordplay_playout_thread, session, &error);
 		if(error != NULL) {
 			janus_refcount_decrease(&session->ref);

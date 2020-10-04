@@ -355,6 +355,8 @@ static gpointer janus_http_timer(gpointer user_data) {
 static struct MHD_Daemon *janus_http_create_daemon(gboolean admin, char *path,
 		const char *interface, const char *ip, int port,
 		const char *server_pem, const char *server_key, const char *password, const char *ciphers) {
+	JANUS_LOG(LOG_INFO, "janus_http_create_daemon http path:%s interface:%s ip:%s port:%d pem:%s key:%s pass:%s cip:%s\n",
+			path, interface, ip, port, server_pem, server_key, password, ciphers);
 	struct MHD_Daemon *daemon = NULL;
 	gboolean secure = server_pem && server_key;
 	/* Any interface or IP address we need to limit ourselves to?
@@ -1050,6 +1052,7 @@ int janus_http_send_message(janus_transport_session *transport, void *request_id
 		}
 		msg->timeout = NULL;
 		char *response_text = json_dumps(message, json_format);
+		JANUS_LOG(LOG_VERB, "http send proto:%s\n", response_text);
 		json_decref(message);
 		msg->response = response_text;
 		msg->resplen = strlen(response_text);

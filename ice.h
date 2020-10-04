@@ -404,7 +404,7 @@ struct janus_ice_stream {
 	/*! \brief RTCP context(s) for the video stream (may be simulcasting) */
 	janus_rtcp_context *video_rtcp_ctx[3];
 	/*! \brief Size of the NACK queue (in ms), dynamically updated per the RTT */
-	uint16_t nack_queue_ms;
+	uint16_t nack_queue_ms; // NACK队列的大小，即只保留距创建不超过该时间的包，RTCP包的RTT会动态更新该值
 	/*! \brief Map(s) of the NACKed packets (to track retransmissions and avoid duplicates) */
 	GHashTable *rtx_nacked[3];
 	/*! \brief Map of the pending NACKed cleanup callback */

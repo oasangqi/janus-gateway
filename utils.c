@@ -30,6 +30,7 @@
 #include "mach_gettime.h"
 #endif
 
+// 系统启动时间，可通过cat /proc/uptime查看
 gint64 janus_get_monotonic_time(void) {
 	struct timespec ts;
 	clock_gettime (CLOCK_MONOTONIC, &ts);
