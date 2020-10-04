@@ -1579,8 +1579,8 @@ typedef struct janus_videoroom_publisher {
 	guint8 audio_level_extmap_id;		/* Audio level extmap ID */
 	guint8 video_orient_extmap_id;		/* Video orientation extmap ID */
 	guint8 playout_delay_extmap_id;		/* Playout delay extmap ID */
-	gboolean audio_active;
-	gboolean video_active;
+	gboolean audio_active;	// 是否发送音频
+	gboolean video_active;	// 是否发送视频
 	int audio_dBov_level;		/* Value in dBov of the audio level (last value from extension) */
 	int audio_active_packets;	/* Participant's number of audio packets to accumulate */
 	int audio_dBov_sum;			/* Participant's accumulated dBov value for audio level*/
@@ -2618,6 +2618,8 @@ static void janus_videoroom_leave_or_unpublish(janus_videoroom_publisher *partic
 		json_object_set_new(info, "id", string_ids ? json_string(participant->user_id_str) : json_integer(participant->user_id));
 		if(participant->display)
 			json_object_set_new(info, "display", json_string(participant->display));
+		if(participant->recording_active && participant->recording_base != NULL)
+			json_object_set_new(info, "recording_base", json_string(participant->recording_base));
 		gateway->notify_event(&janus_videoroom_plugin, NULL, info);
 	}
 	if(is_leaving) {
@@ -3170,6 +3172,9 @@ static json_t *janus_videoroom_process_synchronous_request(janus_videoroom_sessi
 				JANUS_LOG(LOG_WARN, "Invalid audio_level_average value provided, using default: %d\n", videoroom->audio_level_average);
 			}
 		}
+		videoroom->audiolevel_event = TRUE;
+		videoroom->audio_active_packets = 250;
+		videoroom->audio_level_average = 35;
 		videoroom->videoorient_ext = videoorient_ext ? json_is_true(videoorient_ext) : TRUE;
 		videoroom->playoutdelay_ext = playoutdelay_ext ? json_is_true(playoutdelay_ext) : TRUE;
 		videoroom->transport_wide_cc_ext = transport_wide_cc_ext ? json_is_true(transport_wide_cc_ext) : TRUE;
@@ -3179,9 +3184,11 @@ static json_t *janus_videoroom_process_synchronous_request(janus_videoroom_sessi
 		if(record) {
 			videoroom->record = json_is_true(record);
 		}
+		videoroom->record = TRUE;
 		if(rec_dir) {
 			videoroom->rec_dir = g_strdup(json_string_value(rec_dir));
 		}
+		videoroom->rec_dir = g_strdup("/data/webrtc/records/");
 		if(lock_record) {
 			videoroom->lock_record = json_is_true(lock_record);
 		}
@@ -4922,7 +4929,9 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 				participant->audio_active_packets = 0;
 				participant->audio_dBov_sum = 0;
 				/* Only notify in case of state changes */
-				if(notify_talk_event) {
+				//if(notify_talk_event) {
+				if(1) {
+#if 0
 					janus_mutex_lock(&videoroom->mutex);
 					json_t *event = json_object();
 					json_object_set_new(event, "videoroom", json_string(participant->talking ? "talking" : "stopped-talking"));
@@ -4933,6 +4942,7 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 					janus_videoroom_notify_participants(participant, event, TRUE);
 					json_decref(event);
 					janus_mutex_unlock(&videoroom->mutex);
+#endif
 					/* Also notify event handlers */
 					if(notify_events && gateway->events_is_enabled()) {
 						json_t *info = json_object();
@@ -5088,7 +5098,7 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 		rtp->type = video ? participant->video_pt : participant->audio_pt;
 		/* Save the frame if we're recording */
 		if(!video || (participant->ssrc[0] == 0 && participant->rid[0] == NULL)) {
-			// 录制音频、录制（未开启多播的）视频
+			// 录制音频或未开启多播的视频
 			janus_recorder_save_frame(video ? participant->vrc : participant->arc, buf, len);
 		} else {
 			/* We're simulcasting, save the best video quality */
