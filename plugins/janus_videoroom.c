@@ -6229,6 +6229,7 @@ static void *janus_videoroom_handler(void *data) {
 					janus_mutex_lock(&publisher->subscribers_mutex);
 					if(publisher->sdp != NULL) {
 						/* Check if there's something the original SDP has that we should remove */
+						// 生成订阅offer
 						janus_sdp *offer = janus_sdp_parse(publisher->sdp, NULL, 0);
 						subscriber->sdp = offer;
 						session->sdp_version = 1;
@@ -6253,6 +6254,7 @@ static void *janus_videoroom_handler(void *data) {
 						/* How long will the Janus core take to push the event? */
 						g_atomic_int_set(&session->hangingup, 0);
 						gint64 start = janus_get_monotonic_time();
+						// 推送事件给core，由core创建nice agent
 						int res = gateway->push_event(msg->handle, &janus_videoroom_plugin, msg->transaction, event, jsep);
 						JANUS_LOG(LOG_VERB, "  >> Pushing event: %d (took %"SCNu64" us)\n", res, janus_get_monotonic_time()-start);
 						/* Also notify event handlers */

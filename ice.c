@@ -1994,6 +1994,7 @@ static void janus_ice_cb_new_selected_pair (NiceAgent *agent, guint stream_id, g
 	JANUS_LOG(LOG_VERB, "[%"SCNu64"]   Component is ready enough, starting DTLS handshake...\n", handle->handle_id);
 	component->component_connected = janus_get_monotonic_time();
 	/* Start the DTLS handshake, at last */
+	// 连接建立成功后开始DTLS校验 发送Client Hello
 #if GLIB_CHECK_VERSION(2, 46, 0)
 	g_async_queue_push_front(handle->queued_packets, &janus_ice_dtls_handshake);
 #else
@@ -3401,6 +3402,7 @@ int janus_ice_setup_local(janus_ice_handle *handle, int offer, int audio, int vi
 	handle->controlling = janus_ice_lite_enabled ? FALSE : !offer;
 	JANUS_LOG(LOG_INFO, "[%"SCNu64"] Creating ICE agent (ICE %s mode, %s)\n", handle->handle_id,
 		janus_ice_lite_enabled ? "Lite" : "Full", handle->controlling ? "controlling" : "controlled");
+	// 创建ICE agent并注册事件
 	handle->agent = g_object_new(NICE_TYPE_AGENT,
 		"compatibility", NICE_COMPATIBILITY_DRAFT19,
 		"main-context", handle->mainctx,
@@ -3451,10 +3453,12 @@ int janus_ice_setup_local(janus_ice_handle *handle, int offer, int audio, int vi
 #endif
 	g_object_set(G_OBJECT(handle->agent), "upnp", FALSE, NULL);
 	g_object_set(G_OBJECT(handle->agent), "controlling-mode", handle->controlling, NULL);
+	// 本地搜集Candidate完毕
 	g_signal_connect (G_OBJECT (handle->agent), "candidate-gathering-done",
 		G_CALLBACK (janus_ice_cb_candidate_gathering_done), handle);
 	g_signal_connect (G_OBJECT (handle->agent), "component-state-changed",
 		G_CALLBACK (janus_ice_cb_component_state_changed), handle);
+	// ICE 连接成功
 #ifndef HAVE_LIBNICE_TCP
 	g_signal_connect (G_OBJECT (handle->agent), "new-selected-pair",
 #else
@@ -3462,6 +3466,7 @@ int janus_ice_setup_local(janus_ice_handle *handle, int offer, int audio, int vi
 #endif
 		G_CALLBACK (janus_ice_cb_new_selected_pair), handle);
 	if(janus_full_trickle_enabled) {
+	// 异步获取并发送candidate(Janus half trickle时，Janus的Candidates通过SDP发送)
 #ifndef HAVE_LIBNICE_TCP
 		g_signal_connect (G_OBJECT (handle->agent), "new-candidate",
 #else
@@ -3469,6 +3474,7 @@ int janus_ice_setup_local(janus_ice_handle *handle, int offer, int audio, int vi
 #endif
 			G_CALLBACK (janus_ice_cb_new_local_candidate), handle);
 	}
+	// 检测到对端prflx类型candidate
 #ifndef HAVE_LIBNICE_TCP
 	g_signal_connect (G_OBJECT (handle->agent), "new-remote-candidate",
 #else
@@ -3633,13 +3639,14 @@ int janus_ice_setup_local(janus_ice_handle *handle, int offer, int audio, int vi
 	nice_agent_set_port_range(handle->agent, handle->stream_id, 1, rtp_range_min, rtp_range_max);
 #endif
 	/* Gather now only if we're doing hanf-trickle */
+	// half trickle 信令处理线程自己(同步)搜集candidates
 	if(!janus_full_trickle_enabled && !nice_agent_gather_candidates(handle->agent, handle->stream_id)) {
 		JANUS_LOG(LOG_ERR, "[%"SCNu64"] Error gathering candidates...\n", handle->handle_id);
 		janus_flags_clear(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_HAS_AGENT);
 		janus_ice_webrtc_hangup(handle, "Gathering error");
 		return -1;
 	}
-	// 关联收到媒体数据后的回调
+	// 关联收到ICE通道数据后的回调
 	nice_agent_attach_recv(handle->agent, handle->stream_id, 1, g_main_loop_get_context(handle->mainloop),
 		janus_ice_cb_nice_recv, component);
 #ifdef HAVE_TURNRESTAPI
@@ -3649,6 +3656,7 @@ int janus_ice_setup_local(janus_ice_handle *handle, int offer, int audio, int vi
 	}
 #endif
 	/* Create DTLS-SRTP context, at last */
+	// 创建并初始化DTLS上下文
 	component->dtls = janus_dtls_srtp_create(component, stream->dtls_role);
 	if(!component->dtls) {
 		/* FIXME We should clear some resources... */
@@ -3659,6 +3667,7 @@ int janus_ice_setup_local(janus_ice_handle *handle, int offer, int audio, int vi
 	}
 	janus_refcount_increase(&component->dtls->ref);
 	/* If we're doing full-tricke, start gathering asynchronously */
+	// full trickle 通知ICE线程(异步)搜集candidates
 	if(janus_full_trickle_enabled) {
 #if GLIB_CHECK_VERSION(2, 46, 0)
 		g_async_queue_push_front(handle->queued_packets, &janus_ice_start_gathering);

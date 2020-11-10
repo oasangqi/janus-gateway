@@ -1516,6 +1516,7 @@ char *janus_sdp_merge(void *ice_handle, janus_sdp *anon, gboolean offer) {
 		}
 		if(!janus_ice_is_full_trickle_enabled()) {
 			/* And now the candidates (but only if we're half-trickling) */
+			// 默认half trickle，Janus的Candidate通过SDP发送
 			janus_ice_candidates_to_sdp(handle, m, stream->stream_id, 1);
 			/* Since we're half-trickling, we need to notify the peer that these are all the
 			 * candidates we have for this media stream, via an end-of-candidates attribute:

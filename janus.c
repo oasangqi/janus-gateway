@@ -1395,6 +1395,7 @@ int janus_process_incoming_request(janus_request *request) {
 				/* New session */
 				if(offer) {
 					/* Setup ICE locally (we received an offer) */
+					// 创建ICE本端引擎 非常重要!!!
 					if(janus_ice_setup_local(handle, offer, audio, video, data, do_trickle) < 0) {
 						JANUS_LOG(LOG_ERR, "Error setting ICE locally\n");
 						janus_sdp_destroy(parsed_sdp);
