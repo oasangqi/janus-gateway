@@ -6426,6 +6426,7 @@ static void *janus_videoroom_handler(void *data) {
 					/* Send a new REMB */
 					if(g_atomic_int_get(&session->started))
 						participant->remb_latest = janus_get_monotonic_time();
+					// 通过发送REMB包设置视频bitrate
 					gateway->send_remb(msg->handle, participant->bitrate);
 				}
 				if(keyframe && json_is_true(keyframe)) {

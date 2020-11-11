@@ -1267,7 +1267,7 @@ int janus_process_incoming_request(janus_request *request) {
 		json_object_set_new(reply, "transaction", json_string(transaction_text));
 		/* Send the success reply */
 		ret = janus_process_success(request, reply);
-	} else if(!strcasecmp(message_text, "message")) {
+	} else if(!strcasecmp(message_text, "message")) { // 插件内消息
 		if(handle == NULL) {
 			/* Query is an handle-level command */
 			ret = janus_process_error(request, session_id, transaction_text, JANUS_ERROR_INVALID_REQUEST_PATH, "Unhandled request '%s' at this path", message_text);
@@ -1520,6 +1520,7 @@ int janus_process_incoming_request(janus_request *request) {
 			g_free(tmp);
 			janus_mutex_unlock(&handle->mutex);
 			/* Anonymize SDP */
+			// 去掉该SDP中Janus不支持的属性
 			if(janus_sdp_anonymize(parsed_sdp) < 0) {
 				/* Invalid SDP */
 				ret = janus_process_error(request, session_id, transaction_text, JANUS_ERROR_JSEP_INVALID_SDP, "JSEP error: invalid SDP");
@@ -1585,6 +1586,7 @@ int janus_process_incoming_request(janus_request *request) {
 			if(janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_E2EE))
 				json_object_set_new(body_jsep, "e2ee", json_true());
 		}
+		// 将插件消息发给插件
 		janus_plugin_result *result = plugin_t->handle_message(handle->app_handle,
 			g_strdup((char *)transaction_text), body, body_jsep);
 		g_free(jsep_type);
