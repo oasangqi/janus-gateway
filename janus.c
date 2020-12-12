@@ -901,6 +901,7 @@ static void janus_request_ice_handle_answer(janus_ice_handle *handle, int audio,
 	/* We got our answer */
 	janus_flags_clear(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_PROCESSING_OFFER);
 	/* Any pending trickles? */
+	// 从Janus收到offer到异步回复answer期间可能会收到并缓存对端候选地址
 	if(handle->pending_trickles) {
 		JANUS_LOG(LOG_VERB, "[%"SCNu64"]   -- Processing %d pending trickle candidates\n", handle->handle_id, g_list_length(handle->pending_trickles));
 		GList *temp = NULL;
@@ -1043,6 +1044,7 @@ int janus_process_incoming_request(janus_request *request) {
 		/* Take note of the request source that originated this session (HTTP, WebSockets, RabbitMQ?) */
 		session->source = janus_request_new(request->transport, request->instance, NULL, FALSE, NULL);
 		/* Notify the source that a new session has been created */
+		// websocket目前什么都不做
 		request->transport->session_created(request->instance, session->session_id);
 		/* Notify event handlers */
 		if(janus_events_is_enabled()) {
@@ -1118,6 +1120,7 @@ int janus_process_incoming_request(janus_request *request) {
 			ret = janus_process_error(request, session_id, transaction_text, JANUS_ERROR_INVALID_REQUEST_PATH, "Unhandled request '%s' at this path", message_text);
 			goto jsondone;
 		}
+		// json参数检查
 		JANUS_VALIDATE_JSON_OBJECT(root, attach_parameters,
 			error_code, error_cause, FALSE,
 			JANUS_ERROR_MISSING_MANDATORY_ELEMENT, JANUS_ERROR_INVALID_ELEMENT_TYPE);
@@ -1148,6 +1151,7 @@ int janus_process_incoming_request(janus_request *request) {
 		json_t *opaque = json_object_get(root, "opaque_id");
 		const char *opaque_id = opaque ? json_string_value(opaque) : NULL;
 		/* Create handle */
+		// 创建ICE handle，ICE最关键的数据结构
 		handle = janus_ice_handle_create(session, opaque_id, token_value);
 		if(handle == NULL) {
 			ret = janus_process_error(request, session_id, transaction_text, JANUS_ERROR_UNKNOWN, "Memory error");
@@ -1158,6 +1162,7 @@ int janus_process_incoming_request(janus_request *request) {
 		janus_refcount_increase(&handle->ref);
 		/* Attach to the plugin */
 		int error = 0;
+		// 把ICE handle和插件会话进行关联
 		if((error = janus_ice_handle_attach_plugin(session, handle, plugin_t)) != 0) {
 			/* TODO Make error struct to pass verbose information */
 			janus_session_handles_remove(session, handle);
@@ -1547,6 +1552,9 @@ int janus_process_incoming_request(janus_request *request) {
 		}
 
 		/* Send the message to the plugin (which must eventually free transaction_text and unref the two objects, body and jsep) */
+		// body为root的一个成员，处理完本条消息后root有一次json_decref
+		// 因为videoroom插件会json_decref body，此时必须先json_incef一次，避免内存出错(double free)
+		// 注：json_t *对象作为子对象赋值给新的json_t*父对象时，先json_incref子对象，这样json_decref父对象时子对象才不会被销毁
 		json_incref(body);
 		json_t *body_jsep = NULL;
 		if(jsep_sdp_stripped) {

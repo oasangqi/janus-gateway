@@ -6080,6 +6080,7 @@ static void *janus_videoroom_handler(void *data) {
 				if(attendees != NULL)
 					json_object_set_new(event, "attendees", attendees);
 				/* See if we need to notify about a new participant joined the room (by default, we don't). */
+				// (根据配置决定是否)通知有人加入房间
 				janus_videoroom_participant_joining(publisher);
 
 				/* Also notify event handlers */
@@ -6205,6 +6206,7 @@ static void *janus_videoroom_handler(void *data) {
 					goto error;
 				} else {
 					/* Increase the refcount before unlocking so that nobody can remove and free the publisher in the meantime. */
+					// 引用计数+1，确保使用publisher结构期间对象不被销毁
 					janus_refcount_increase(&publisher->ref);
 					janus_refcount_increase(&publisher->session->ref);
 					/* First of all, let's check if this room requires valid private_id values */
@@ -6569,6 +6571,7 @@ static void *janus_videoroom_handler(void *data) {
 					}
 				}
 				janus_mutex_unlock(&participant->rec_mutex);
+				// 修改昵称
 				if(display) {
 					janus_mutex_lock(&participant->room->mutex);
 					char *old_display = participant->display;
@@ -6617,6 +6620,7 @@ static void *janus_videoroom_handler(void *data) {
 					}
 					gateway->notify_event(&janus_videoroom_plugin, session->handle, info);
 				}
+				// jsep offer往下继续处理
 			} else if(!strcasecmp(request_text, "unpublish")) {
 				/* This participant wants to unpublish */
 				if(!participant->sdp) {
@@ -7177,6 +7181,7 @@ static void *janus_videoroom_handler(void *data) {
 				goto error;
 			} else {
 				/* This is a new publisher: is there room? */
+				// 处理发布offer
 				participant = janus_videoroom_session_get_publisher(session);
 				janus_videoroom *videoroom = participant->room;
 				int count = 0;
@@ -7292,6 +7297,9 @@ static void *janus_videoroom_handler(void *data) {
 					}
 				}
 				JANUS_LOG(LOG_VERB, "The publisher is going to use the %s audio codec\n", janus_audiocodec_name(participant->acodec));
+				// audio payload type，
+				// OPUS 由属性"a=rtpmap:111 opus/48000/2"决定
+				// ...
 				participant->audio_pt = janus_audiocodec_pt(participant->acodec);
 				if(participant->acodec != JANUS_AUDIOCODEC_MULTIOPUS) {
 					g_free(audio_fmtp);
@@ -7333,7 +7341,12 @@ static void *janus_videoroom_handler(void *data) {
 					}
 				}
 				JANUS_LOG(LOG_VERB, "The publisher is going to use the %s video codec\n", janus_videocodec_name(participant->vcodec));
+				// video vp8 payload type
+				// VP8 由属性"a=rtpmap:96 VP8/90000"决定
+				// VP9 由属性"a=rtpmap:100 VP9/90000、a=fmtp:100 profile-id=2"决定
+				// H264 由属性"a=rtpmap:125 H264/90000、a=fmtp:127 level-asymmetry-allowed=1;packetization-mode=0;profile-level-id=42001f"决定
 				participant->video_pt = janus_videocodec_pt(participant->vcodec);
+				// 根据offer生成answer
 				janus_sdp *answer = janus_sdp_generate_answer(offer,
 					JANUS_SDP_OA_AUDIO_CODEC, janus_audiocodec_name(participant->acodec),
 					JANUS_SDP_OA_AUDIO_DIRECTION, JANUS_SDP_RECVONLY,
@@ -7431,6 +7444,7 @@ static void *janus_videoroom_handler(void *data) {
 						break;
 					twcc_ext_id++;
 				}
+				// 给订阅者准备的offer
 				offer = janus_sdp_generate_offer(s_name, answer->c_addr,
 					JANUS_SDP_OA_AUDIO, participant->audio,
 					JANUS_SDP_OA_AUDIO_CODEC, janus_audiocodec_name(participant->acodec),

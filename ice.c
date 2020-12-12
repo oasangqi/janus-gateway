@@ -1238,6 +1238,7 @@ gint janus_ice_handle_attach_plugin(void *core_session, janus_ice_handle *handle
 	session_handle->gateway_handle = handle;
 	session_handle->plugin_handle = NULL;
 	g_atomic_int_set(&session_handle->stopped, 0);
+	// 创建并关联插件会话
 	plugin->create_session(session_handle, &error);
 	if(error) {
 		/* TODO Make error struct to pass verbose information */
@@ -1273,6 +1274,7 @@ gint janus_ice_handle_attach_plugin(void *core_session, janus_ice_handle *handle
 	// 注册发包函数?
 	handle->rtp_source = janus_ice_outgoing_traffic_create(handle, (GDestroyNotify)g_free);
 	g_source_set_priority(handle->rtp_source, G_PRIORITY_DEFAULT);
+	// 把发包的工作挂到mainctx 等到g_main_loop_run(handle->mainloop)就可以发包了 
 	g_source_attach(handle->rtp_source, handle->mainctx);
 	if(static_event_loops == 0) {
 		/* Now spawn a thread for this loop */
@@ -3369,6 +3371,7 @@ void janus_ice_setup_remote_candidates(janus_ice_handle *handle, guint stream_id
 		gsc = gsc->next;
 	}
 	if(handle->queued_packets != NULL) {
+		// 通知发包线程有新的对端候选地址
 #if GLIB_CHECK_VERSION(2, 46, 0)
 		g_async_queue_push_front(handle->queued_packets, &janus_ice_add_candidates);
 #else
@@ -3426,6 +3429,7 @@ int janus_ice_setup_local(janus_ice_handle *handle, int offer, int audio, int vi
 	janus_flags_clear(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_TRICKLE_SYNCED);
 
 	/* Note: NICE_COMPATIBILITY_RFC5245 is only available in more recent versions of libnice */
+	// 一般对于发布而言，Janus端的handle为controlled，浏览器为controlling
 	handle->controlling = janus_ice_lite_enabled ? FALSE : !offer;
 	JANUS_LOG(LOG_INFO, "[%"SCNu64"] Creating ICE agent (ICE %s mode, %s)\n", handle->handle_id,
 		janus_ice_lite_enabled ? "Lite" : "Full", handle->controlling ? "controlling" : "controlled");

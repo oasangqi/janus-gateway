@@ -135,7 +135,7 @@ typedef struct janus_sdp_mline {
 	/*! \brief Media protocol */
 	char *proto;
 	/*! \brief List of formats */
-	GList *fmts;
+	GList *fmts; // 字符串格式的ptype
 	/*! \brief List of payload types */
 	GList *ptypes;
 	/*! \brief Media c= protocol */

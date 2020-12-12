@@ -265,8 +265,11 @@ janus_sdp *janus_sdp_parse(const char *sdp, char *error, size_t errlen) {
 		char *line = NULL, *cr = NULL;
 		while(success && (line = parts[index]) != NULL) {
 			cr = strchr(line, '\r');
+			// xxxxx\r\n => xxxxx'\0''\n' 即 xxxxx
+			// '\r''\n' => '\0''\n'
 			if(cr != NULL)
 				*cr = '\0';
+			// '\0''\n' => '\r''\n'
 			if(*line == '\0') {
 				if(cr != NULL)
 					*cr = '\r';
@@ -405,6 +408,9 @@ janus_sdp *janus_sdp_parse(const char *sdp, char *error, size_t errlen) {
 						break;
 					}
 					case 'm': {
+						// 解析到m= 创建一个新的媒体
+						// case 1: 首次解析到m=
+						// case 2: 解析完一个媒体后遇到一个新的m=
 						janus_sdp_mline *m = g_malloc0(sizeof(janus_sdp_mline));
 						g_atomic_int_set(&m->destroyed, 0);
 						janus_refcount_init(&m->ref, janus_sdp_mline_free);
@@ -538,6 +544,7 @@ janus_sdp *janus_sdp_parse(const char *sdp, char *error, size_t errlen) {
 						line += 2;
 						char *semicolon = strchr(line, ':');
 						if(semicolon == NULL) {
+							// 解析a=sendrecv  、sendrecv...
 							/* Is this a media direction attribute? */
 							janus_sdp_mdirection direction = janus_sdp_parse_mdirection(line);
 							if(direction != JANUS_SDP_INVALID) {
@@ -548,6 +555,7 @@ janus_sdp *janus_sdp_parse(const char *sdp, char *error, size_t errlen) {
 							a->name = g_strdup(line);
 							a->value = NULL;
 						} else {
+							// 解析a=name:value
 							if(*(semicolon+1) == '\0') {
 								janus_sdp_attribute_destroy(a);
 								if(error)
@@ -1393,6 +1401,7 @@ janus_sdp *janus_sdp_generate_answer(janus_sdp *offer, ...) {
 	char *custom_audio_fmtp = NULL;
 	GList *extmaps = NULL;
 	janus_sdp_mdirection audio_dir = JANUS_SDP_SENDRECV, video_dir = JANUS_SDP_SENDRECV;
+	// 可变参数成对地取
 	int property = va_arg(args, int);
 	while(property != JANUS_SDP_OA_DONE) {
 		if(property == JANUS_SDP_OA_AUDIO) {
@@ -1512,6 +1521,7 @@ janus_sdp *janus_sdp_generate_answer(janus_sdp *offer, ...) {
 			}
 		}
 		if(m->type == JANUS_SDP_AUDIO || m->type == JANUS_SDP_VIDEO) {
+			// target direction
 			janus_sdp_mdirection target_dir = m->type == JANUS_SDP_AUDIO ? audio_dir : video_dir;
 			/* What is the direction we were offered? And how were we asked to react?
 			 * Adapt the direction in our answer accordingly */
@@ -1551,6 +1561,7 @@ janus_sdp *janus_sdp_generate_answer(janus_sdp *offer, ...) {
 					break;
 			}
 			/* Look for the right codec and stick to that */
+			// codec为最终协商的编码
 			const char *codec = m->type == JANUS_SDP_AUDIO ? audio_codec : video_codec;
 			if(codec == NULL) {
 				/* FIXME User didn't provide a codec to accept? Let's see if Opus (for audio)
@@ -1559,6 +1570,7 @@ janus_sdp *janus_sdp_generate_answer(janus_sdp *offer, ...) {
 				 * Notice that if it's not a codec we understand, we reject the medium,
 				 * as browsers would reject it anyway. If you need more flexibility you'll
 				 * have to generate an answer yourself, rather than automatically... */
+				// 优先OPUS、VP8编码
 				codec = m->type == JANUS_SDP_AUDIO ? "opus" : "vp8";
 				if(janus_sdp_get_codec_pt(offer, codec) < 0) {
 					/* We couldn't find our preferred codec, let's try something else */
