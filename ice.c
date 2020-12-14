@@ -1676,10 +1676,13 @@ janus_slow_link_update(janus_ice_component *component, janus_ice_handle *handle,
 	guint sl_lost_last_count = uplink ?
 		(video ? component->in_stats.sl_lost_count_video : component->in_stats.sl_lost_count_audio) :
 		(video ? component->out_stats.sl_lost_count_video : component->out_stats.sl_lost_count_audio);
-	// lost:丢包总数，发布：累加RTCP RR包告知的丢包个数，订阅：累加janus统计的丢包总数
+	// lost:丢包总数，订阅：累加RTCP RR包告知的丢包个数，发布：累加janus统计的丢包总数
 	// 发布包的丢包率由Janus每秒统计一次
 	// 订阅包的丢包率统计频率由客户端的RTCP RR包频率决定
 	guint sl_lost_recently = (lost >= sl_lost_last_count) ? (lost - sl_lost_last_count) : 0;
+	if (uplink && video)// && sl_lost_recently > 0)
+		JANUS_LOG(LOG_VERB, "[%"SCNu64"] Sending REMB uplink:%s video:%s lost:%d media quality:%d\n", handle->handle_id,
+				uplink?"true":"false", video?"true":"false", sl_lost_recently, janus_rtcp_context_get_out_media_link_quality(rtcp_ctx));//rtcp_ctx->out_media_link_quality);
 	if(slowlink_threshold > 0 && sl_lost_recently >= slowlink_threshold) {
 		/* Tell the plugin */
 		janus_plugin *plugin = (janus_plugin *)handle->app;
@@ -1726,6 +1729,15 @@ janus_slow_link_update(janus_ice_component *component, janus_ice_handle *handle,
 					session->session_id, handle->handle_id, handle->opaque_id, info);
 			}
 		}
+	}
+	// 订阅视频丢包通知插件
+	// TODO:阈值待优化
+	else if(video && uplink && sl_lost_recently >= 10) {
+		/* Tell the plugin */
+		janus_plugin *plugin = (janus_plugin *)handle->app;
+		if(plugin && plugin->slow_link && janus_plugin_session_is_alive(handle->app_handle) &&
+				!g_atomic_int_get(&handle->destroyed))
+			plugin->slow_link(handle->app_handle, uplink, video);
 	}
 	/* Update the counter */
 	// 每秒更新统计的丢包总数，不管本次RTCP RR告知的丢包有没有超过阈值
