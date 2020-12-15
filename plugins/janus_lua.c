@@ -2062,7 +2062,7 @@ void janus_lua_data_ready(janus_plugin_session *handle) {
 	}
 }
 
-void janus_lua_slow_link(janus_plugin_session *handle, int uplink, int video) {
+void janus_lua_slow_link(janus_plugin_session *handle, int uplink, int video, int quality) {
 	if(handle == NULL || handle->stopped || g_atomic_int_get(&lua_stopping) || !g_atomic_int_get(&lua_initialized))
 		return;
 	janus_mutex_lock(&lua_sessions_mutex);

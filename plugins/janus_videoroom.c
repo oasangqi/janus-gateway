@@ -1156,7 +1156,7 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 void janus_videoroom_incoming_rtcp(janus_plugin_session *handle, janus_plugin_rtcp *packet);
 void janus_videoroom_incoming_data(janus_plugin_session *handle, janus_plugin_data *packet);
 void janus_videoroom_data_ready(janus_plugin_session *handle);
-void janus_videoroom_slow_link(janus_plugin_session *handle, int uplink, int video);
+void janus_videoroom_slow_link(janus_plugin_session *handle, int uplink, int video, int quality);
 void janus_videoroom_hangup_media(janus_plugin_session *handle);
 void janus_videoroom_destroy_session(janus_plugin_session *handle, int *error);
 json_t *janus_videoroom_query_session(janus_plugin_session *handle);
@@ -1592,7 +1592,7 @@ typedef struct janus_videoroom_publisher {
 	gboolean firefox;	/* We send Firefox users a different kind of FIR */
 	uint32_t bitrate;
 	uint32_t bitrateNow;
-	uint32_t bitrateMax; /* max REMB for at least 2 min */
+	uint32_t bitrateMax; /* max REMB before decrease */
 	gint64 remb_startup;/* Incremental changes on REMB to reach the target at startup */
 	gint64 remb_latest;	/* Time of latest sent REMB (to avoid flooding) */
 	gint64 remb_latest_down;	/* Time of latest sent REMB downgrade(to avoid flooding) */
@@ -1650,7 +1650,6 @@ typedef struct janus_videoroom_subscriber {
 	volatile gint destroyed;
 	janus_refcount ref;
 	int video_slow_times; /* slow link event times */
-	gint64 last_video_slow_time;	/* Time of latest video slow link */
 } janus_videoroom_subscriber;
 
 typedef struct janus_videoroom_rtp_relay_packet {
@@ -5169,7 +5168,7 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 			}
 
 			// 降速后的15秒内不提速
-			if(participant->remb_latest_down > 0 && janus_get_monotonic_time()-participant->remb_latest < 15*G_USEC_PER_SEC) {
+			if(participant->remb_latest_down > 0 && janus_get_monotonic_time()-participant->remb_latest_down < 15*G_USEC_PER_SEC) {
 				send_remb = FALSE;
 			}
 
@@ -5182,18 +5181,34 @@ void janus_videoroom_incoming_rtp(janus_plugin_session *handle, janus_plugin_rtp
 				} else {
 					// 动态调高视频码率
 					bitrate = participant->bitrateNow * 1.05;
-					// 接近上次降速的临界值后增速放缓
-					if (participant->bitrateMax > 0 && bitrate > participant->bitrateMax * 0.90) {
-						bitrate = participant->bitrateNow * 1.02;
+					// 增速抛物线
+					if (participant->remb_latest_down > 0 && participant->bitrateMax > 0) {
+						if (bitrate < participant->bitrateMax * 0.60) {
+							bitrate = participant->bitrateNow * 1.08;
+						} else if (bitrate < participant->bitrateMax * 0.70) {
+							bitrate = participant->bitrateNow * 1.05;
+						} else if (bitrate < participant->bitrateMax * 0.80) {
+							bitrate = participant->bitrateNow * 1.02;
+						} else if (bitrate < participant->bitrateMax * 0.90) {
+							bitrate = participant->bitrateNow * 1.01;
+						} else {
+							bitrate = participant->bitrateNow * 1.005;
+						}
 					}
-					// 3分钟内不能突破上次降速的临界值
-					if (participant->bitrateMax > 0 && bitrate > participant->bitrateMax && janus_get_monotonic_time()-participant->remb_latest_down < 180*G_USEC_PER_SEC) {
+					// 降速时码率大于128(清晰度可以了)，则提升到峰值即可
+					if (participant->bitrateMax > 0 && participant->bitrateMax > 128000 && bitrate > participant->bitrateMax) {
 						bitrate = participant->bitrateMax;
-						JANUS_LOG(LOG_VERB, "up REMB, set now=max\n");
+						JANUS_LOG(LOG_VERB, "up REMB, keep max bitrate:%d\n", bitrate);
 					}
 					// 绝对不能超过上限
 					if (bitrate > participant->bitrate) {
 						bitrate = participant->bitrate;
+					}
+					// 没人订阅的情况
+					if (g_slist_length(participant->subscribers) == 0) {
+						bitrate = participant->bitrate;
+						participant->bitrateMax = 0;
+						participant->remb_latest_down = 0;
 					}
 				}
 				//JANUS_LOG(LOG_VERB, "Sending REMB (%s, %"SCNu32")\n", participant->display, bitrate);
@@ -5339,7 +5354,7 @@ void janus_videoroom_data_ready(janus_plugin_session *handle) {
 	}
 }
 
-void janus_videoroom_slow_link(janus_plugin_session *handle, int uplink, int video) {
+void janus_videoroom_slow_link(janus_plugin_session *handle, int uplink, int video, int quality) {
 	/* The core is informing us that our peer got too many NACKs, are we pushing media too hard? */
 	if(handle == NULL || g_atomic_int_get(&handle->stopped) || g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized))
 		return;
@@ -5390,19 +5405,8 @@ void janus_videoroom_slow_link(janus_plugin_session *handle, int uplink, int vid
 			gboolean notify = TRUE;
 			gint64 now = janus_get_monotonic_time();
 			if (video) {
-				if (viewer->video_slow_times > 0 && now - viewer->last_video_slow_time <= 5*G_USEC_PER_SEC) {
-					// 累加5秒内的连续slow link
-					viewer->video_slow_times++;
-				} else {
-					viewer->video_slow_times = 1;
-				}
-				viewer->last_video_slow_time = now;
-				if (publisher->remb_latest_down > 0 && now - publisher->remb_latest_down <= 15*G_USEC_PER_SEC) {
-					// 降速至少间隔15秒
-					notify = FALSE;
-				} 
-				if (viewer->video_slow_times < 5) {
-					// 至少5次slow link才触发降速
+				if (publisher->remb_latest_down > 0 && now - publisher->remb_latest_down <= 3*G_USEC_PER_SEC) {
+					// 降速至少间隔3秒
 					notify = FALSE;
 				} 
 				if (publisher->bitrateNow <= 64000) {
@@ -5416,15 +5420,26 @@ void janus_videoroom_slow_link(janus_plugin_session *handle, int uplink, int vid
 			} else {
 				notify = FALSE;
 			}
-			if (notify && publisher != NULL && !g_atomic_int_get(&publisher->destroyed)) {
-				uint32_t bitrate = publisher->bitrateNow * 0.50;
+			if (notify && publisher != NULL && !g_atomic_int_get(&publisher->destroyed) && quality > 0 && quality < 100) {
+				uint32_t bitrate = publisher->bitrateNow * quality * quality / 10000;  // 链路质量的平方 0.9=>0.81
+				// 最多降50%
+				if (bitrate < publisher->bitrateNow * 0.5) {
+					bitrate = publisher->bitrateNow * 0.5;
+				}
+				if (bitrate <= 64000) {
+					// 降速下限64kbps
+					bitrate = 64000;
+				} 
 				gateway->send_remb(publisher->session->handle, bitrate);
 				publisher->remb_latest = janus_get_monotonic_time();
 				viewer->video_slow_times = 0;
+				// 至少间隔15秒才更新峰值
+				if (publisher->remb_latest_down <= 0 || now - publisher->remb_latest_down > 15*G_USEC_PER_SEC) {
+					publisher->bitrateMax = publisher->bitrateNow;
+				}
 				publisher->remb_latest_down = publisher->remb_latest;
-				publisher->bitrateMax = publisher->bitrateNow;
 				publisher->bitrateNow = bitrate;
-				JANUS_LOG(LOG_VERB, "down REMB to %s, bitrate:%d bitrateMax:%d\n", publisher->display,
+				JANUS_LOG(LOG_VERB, "down REMB of %s, bitrate:%d bitrateMax:%d\n", publisher->display,
 							publisher->bitrateNow, publisher->bitrateMax);
 			}
 			json_decref(event);

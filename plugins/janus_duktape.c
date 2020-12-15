@@ -2378,7 +2378,7 @@ void janus_duktape_data_ready(janus_plugin_session *handle) {
 	}
 }
 
-void janus_duktape_slow_link(janus_plugin_session *handle, int uplink, int video) {
+void janus_duktape_slow_link(janus_plugin_session *handle, int uplink, int video, int quality) {
 	if(handle == NULL || handle->stopped || g_atomic_int_get(&duktape_stopping) || !g_atomic_int_get(&duktape_initialized))
 		return;
 	janus_mutex_lock(&duktape_sessions_mutex);
