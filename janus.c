@@ -4766,6 +4766,16 @@ gint main(int argc, char *argv[])
 			janus_set_min_nack_queue(mnq);
 		}
 	}
+	/* broadcast media link quality timer */
+	item = janus_config_get(config, config_media, janus_config_type_item, "broadcast_quality_timer");
+	if(item && item->value) {
+		int bqt = atoi(item->value);
+		if(bqt < 0) {
+			JANUS_LOG(LOG_WARN, "Ignoring broadcast_quality_timer value as it's not a positive integer\n");
+		} else {
+			janus_set_broad_quality_timer(bqt);
+		}
+	}
 	/* no-media timer */
 	item = janus_config_get(config, config_media, janus_config_type_item, "no_media_timer");
 	if(item && item->value) {

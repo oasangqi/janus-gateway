@@ -1649,7 +1649,6 @@ typedef struct janus_videoroom_subscriber {
 	gboolean e2ee;		/* If media for this subscriber is end-to-end encrypted */
 	volatile gint destroyed;
 	janus_refcount ref;
-	int video_slow_times; /* slow link event times */
 } janus_videoroom_subscriber;
 
 typedef struct janus_videoroom_rtp_relay_packet {
@@ -4724,7 +4723,8 @@ struct janus_plugin_result *janus_videoroom_handle_message(janus_plugin_session 
 	} else if(!strcasecmp(request_text, "join") || !strcasecmp(request_text, "joinandconfigure")
 			|| !strcasecmp(request_text, "configure") || !strcasecmp(request_text, "publish") || !strcasecmp(request_text, "unpublish")
 			|| !strcasecmp(request_text, "start") || !strcasecmp(request_text, "pause") || !strcasecmp(request_text, "switch")
-			|| !strcasecmp(request_text, "leave")) {
+			|| !strcasecmp(request_text, "leave")
+			|| !strcasecmp(request_text, "broad_media_link_quality")) {
 		/* These messages are handled asynchronously */
 
 		janus_videoroom_message *msg = g_malloc(sizeof(janus_videoroom_message));
@@ -5432,7 +5432,6 @@ void janus_videoroom_slow_link(janus_plugin_session *handle, int uplink, int vid
 				} 
 				gateway->send_remb(publisher->session->handle, bitrate);
 				publisher->remb_latest = janus_get_monotonic_time();
-				viewer->video_slow_times = 0;
 				// 至少间隔15秒才更新峰值
 				if (publisher->remb_latest_down <= 0 || now - publisher->remb_latest_down > 15*G_USEC_PER_SEC) {
 					publisher->bitrateMax = publisher->bitrateNow;
@@ -6228,7 +6227,6 @@ static void *janus_videoroom_handler(void *data) {
 					}
 					janus_mutex_unlock(&videoroom->mutex);
 					janus_videoroom_subscriber *subscriber = g_malloc0(sizeof(janus_videoroom_subscriber));
-					subscriber->video_slow_times = 0;
 					subscriber->session = session;
 					subscriber->room_id = videoroom->room_id;
 					subscriber->room_id_str = videoroom->room_id_str ? g_strdup(videoroom->room_id_str) : NULL;
@@ -6650,6 +6648,17 @@ static void *janus_videoroom_handler(void *data) {
 				participant->data_active = FALSE;
 				g_atomic_int_set(&session->started, 0);
 				//~ session->destroy = TRUE;
+			} else if(!strcasecmp(request_text, "broad_media_link_quality")) {
+                // 发布者广播发布质量
+                guint quality = json_integer_value(json_object_get(root, "quality"));
+				event = json_object();
+				json_object_set_new(event, "videoroom", json_string("event"));
+				json_object_set_new(event, "room", string_ids ? json_string(participant->room->room_id_str) : json_integer(participant->room->room_id)); 
+				json_object_set_new(event, "id", string_ids ? json_string(participant->user_id_str) : json_integer(participant->user_id));
+                json_object_set_new(event, "quality", json_integer(quality)); 
+                janus_mutex_lock(&participant->room->mutex);
+                janus_videoroom_notify_participants(participant, event, FALSE);
+                janus_mutex_unlock(&participant->room->mutex);
 			} else {
 				janus_refcount_decrease(&participant->ref);
 				JANUS_LOG(LOG_ERR, "Unknown request '%s'\n", request_text);

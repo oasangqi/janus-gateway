@@ -425,6 +425,20 @@ uint janus_get_no_media_timer(void) {
 	return no_media_timer;
 }
 
+/* Time, in seconds, that should broad publish media quality */
+#define DEFAULT_BROAD_QUALITY_TIMER	5
+static uint broad_quality_timer = DEFAULT_BROAD_QUALITY_TIMER;
+void janus_set_broad_quality_timer(uint timer) {
+	broad_quality_timer = timer;
+	if(broad_quality_timer == 0)
+		JANUS_LOG(LOG_VERB, "Disabling broadcast media link quality timer\n");
+	else
+		JANUS_LOG(LOG_VERB, "Setting broadcast media link quality timer to %us\n", broad_quality_timer);
+}
+uint janus_get_broad_quality_timer(void) {
+	return broad_quality_timer;
+}
+
 /* Number of lost packets per seconds on a media stream (uplink or downlink,
  * audio or video), that should result in a slow-link event to the iser */
 #define DEFAULT_SLOWLINK_THRESHOLD	4
@@ -4114,6 +4128,38 @@ static gboolean janus_ice_outgoing_stats_handle(gpointer user_data) {
 			}
 		}
 	}
+
+	// 广播发布质量
+	handle->last_broad_quality++;
+	if(broad_quality_timer > 0 && handle->last_broad_quality >= broad_quality_timer) {
+		handle->last_broad_quality = 0;
+		int media_link_quality = -1;
+		// 优先取视频质量
+		if(stream && stream->video_recv && janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_HAS_VIDEO)) {
+			int vindex=0;
+			for(vindex=0; vindex<3; vindex++) {
+				if(stream && stream->video_rtcp_ctx[vindex]) {
+					media_link_quality = janus_rtcp_context_get_in_media_link_quality(stream->video_rtcp_ctx[vindex]);
+					break;
+				}
+			}
+		}
+		// 没有视频则取音频质量
+		if(media_link_quality == -1 && stream->audio_recv && stream->audio_rtcp_ctx
+				&& janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_HAS_AUDIO)) {
+			media_link_quality = janus_rtcp_context_get_in_media_link_quality(stream->audio_rtcp_ctx);
+		}
+		janus_plugin *plugin_t = janus_plugin_find("janus.plugin.videoroom");
+		if(media_link_quality != -1 && plugin_t != NULL) {
+			json_t *event = json_object();
+			json_object_set_new(event, "request", json_string("broad_media_link_quality"));
+			json_object_set_new(event, "quality", json_integer(media_link_quality));
+			janus_plugin_result *result = plugin_t->handle_message(handle->app_handle,
+					g_strdup((char *)"0"), event, NULL);
+			janus_plugin_result_destroy(result);
+		}
+	}
+
 	/* Should we clean up old NACK buffers for any of the streams? */
 	// 清理用于重传的包
 	janus_cleanup_nack_buffer(now, handle->stream, TRUE, TRUE);
@@ -4958,6 +5004,7 @@ void janus_ice_dtls_handshake_done(janus_ice_handle *handle, janus_ice_component
 		g_source_attach(handle->twcc_source, handle->mainctx);
 	}
 	handle->last_event_stats = 0;
+	handle->last_broad_quality = 0;
 	handle->last_srtp_summary = -1;
 	handle->stats_source = g_timeout_source_new_seconds(1);
 	g_source_set_callback(handle->stats_source, janus_ice_outgoing_stats_handle, handle, NULL);
