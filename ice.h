@@ -343,6 +343,8 @@ struct janus_ice_handle {
 	gint last_srtp_error, last_srtp_summary;
 	/*! \brief Count of how many seconds passed since the last stats passed to event handlers */
 	gint last_event_stats;
+	/*! \brief Count of how many seconds passed since the last broadcast quality  */
+	gint last_broad_quality;
 	/*! \brief Flag to decide whether or not packets need to be dumped to a text2pcap file */
 	volatile gint dump_packets;
 	/*! \brief In case this session must be saved to text2pcap, the instance to dump packets to */
